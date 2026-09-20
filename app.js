@@ -19,6 +19,10 @@
     $("connect").textContent = "TikTok connected"; $("connect").disabled = true;
     $("video-section").hidden = false; $("settings-section").hidden = false; $("consent-section").hidden = false;
     try {
+      if (query.get("refresh_check") === "1") {
+        const refresh = await request("/api/token-refresh-check", { method: "POST" });
+        if (!refresh.refreshed || !String(refresh.scopes || "").includes("video.publish")) throw new Error("TikTok token refresh validation failed.");
+      }
       const { user, creator } = await request("/api/creator-info", { method: "POST" });
       $("creator-summary").textContent = `Connected as ${user.display_name || creator.creator_nickname || creator.creator_username}. Posting options below are returned live by TikTok.`;
       for (const option of creator.privacy_level_options || []) { const el = document.createElement("option"); el.value = option; el.textContent = option.replaceAll("_", " "); $("privacy").append(el); }
