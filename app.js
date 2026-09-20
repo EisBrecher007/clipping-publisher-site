@@ -16,8 +16,8 @@
   const setStatus = text => { $("status").textContent = text; };
   const selected = id => $(id).checked;
   const availability = disabled => disabled ? "Unavailable for this creator" : "Available";
-  const setCreatorDetails = (user, creator) => {
-    const name = creator.creator_username || creator.creator_nickname || user.display_name || "Connected TikTok creator";
+  const setCreatorDetails = creator => {
+    const name = creator.creator_username || creator.creator_nickname || "Connected TikTok creator";
     const options = creator.privacy_level_options || [];
     $("creator-summary").textContent = `Connected as ${name}. The settings below are the current values returned by TikTok.`;
     $("creator-name").textContent = name;
@@ -52,7 +52,7 @@
         const refresh = await request("/api/token-refresh-check", { method: "POST" });
         if (!refresh.refreshed || !String(refresh.scopes || "").includes("video.publish")) throw new Error("TikTok token refresh validation failed.");
       }
-      const { user, creator } = await request("/api/creator-info", { method: "POST" }); setCreatorDetails(user, creator);
+      const { creator } = await request("/api/creator-info", { method: "POST" }); setCreatorDetails(creator);
     } catch (error) { $("creator-summary").textContent = "Creator settings could not be loaded. Reconnect TikTok to continue."; setStatus(error.message); }
   };
   $("connect").addEventListener("click", () => { if (!apiOrigin) return setStatus("Sandbox backend is not configured yet."); location.assign(apiOrigin + "/oauth/start"); });
