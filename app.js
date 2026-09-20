@@ -59,16 +59,29 @@
   $("video").addEventListener("change", () => { const file = $("video").files[0]; $("video-summary").textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB` : ""; updateReview(); });
   $("caption").addEventListener("input", () => { $("caption-count").textContent = $("caption").value.length; updateReview(); });
   ["privacy", "allow-comments", "allow-duet", "allow-stitch", "brand-content", "brand-organic", "ai-generated"].forEach(id => $(id).addEventListener("change", updateReview));
-  $("consent").addEventListener("change", () => { $("publish").disabled = !$("consent").checked; });
-  $("publish").addEventListener("click", async () => {
+  let uploadPrepared = false;
+  const directPostForm = async confirmed => {
     const file = $("video").files[0];
-    if (!file) return setStatus("Choose a prepared MP4 first.");
-    if (!$("privacy").value) return setStatus("Choose a TikTok privacy setting.");
+    if (!file) throw new Error("Choose a prepared MP4 first.");
+    if (!$("privacy").value) throw new Error("Choose a TikTok privacy setting.");
     const video = document.createElement("video"); video.preload = "metadata"; video.src = URL.createObjectURL(file); await new Promise((resolve, reject) => { video.onloadedmetadata = resolve; video.onerror = reject; });
-    const max = Number($("settings-section").dataset.maxDuration || 0); if (max && video.duration > max) return setStatus(`This video exceeds the creator's ${max}-second limit.`);
+    const max = Number($("settings-section").dataset.maxDuration || 0); if (max && video.duration > max) throw new Error(`This video exceeds the creator's ${max}-second limit.`);
     const form = new FormData(); form.append("video", file); form.append("title", $("caption").value); form.append("privacy_level", $("privacy").value); form.append("allow_comments", $("allow-comments").checked); form.append("allow_duet", $("allow-duet").checked); form.append("allow_stitch", $("allow-stitch").checked); form.append("brand_content", $("brand-content").checked); form.append("brand_organic", $("brand-organic").checked); form.append("is_aigc", $("ai-generated").checked); form.append("duration_seconds", String(video.duration)); form.append("confirmed", "true");
-    $("publish").disabled = true; setStatus("Initializing the official TikTok Sandbox Direct Post…");
-    try { const result = await request("/api/direct-post/submit", { method: "POST", body: form }); setStatus(`Private Sandbox post accepted by TikTok. Publish status: ${result.status}.`); } catch (error) { setStatus(error.message); $("publish").disabled = false; }
+    form.set("confirmed", String(confirmed)); return form;
+  };
+  $("consent").addEventListener("change", () => { $("publish").disabled = !uploadPrepared || !$("consent").checked; });
+  $("prepare").addEventListener("click", async () => {
+    $("prepare").disabled = true; setStatus("Initializing the official TikTok Sandbox Direct Post…");
+    try { const result = await request("/api/direct-post/prepare", { method: "POST", body: await directPostForm(false) }); if (!result.publish_id_persisted || !result.upload_ready) throw new Error("TikTok publish_id was not safely persisted."); uploadPrepared = true; $("consent").disabled = false; setStatus("TikTok Direct Post initialized. Its publish ID is securely stored and verified. Final confirmation is required before upload."); } catch (error) { setStatus(error.message); $("prepare").disabled = false; }
+  });
+  $("publish").addEventListener("click", async () => {
+    if (!uploadPrepared || !$("consent").checked) return;
+    $("publish").disabled = true; setStatus("Uploading the prepared private Sandbox video…");
+    try {
+      let result = await request("/api/direct-post/upload", { method: "POST", body: await directPostForm(true) });
+      for (let attempt = 0; attempt < 24 && !["PUBLISH_COMPLETE", "FAILED"].includes(result.status); attempt++) { await new Promise(resolve => setTimeout(resolve, 5000)); result = await request("/api/direct-post/status", { method: "POST" }); }
+      setStatus(`Private Sandbox post status: ${result.status}.`);
+    } catch (error) { setStatus(error.message); }
   });
   if (query.get("connected") === "1" && session()) enableConnectedFlow();
 })();
