@@ -1,0 +1,6 @@
+# Copy to .dev.vars for local development. Do not commit .dev.vars.
+TIKTOK_CLIENT_KEY=
+TIKTOK_CLIENT_SECRET=
+TOKEN_ENCRYPTION_KEY_BASE64=
+APP_ORIGIN=https://eisbrecher007.github.io
+API_ORIGIN=http://localhost:8787
