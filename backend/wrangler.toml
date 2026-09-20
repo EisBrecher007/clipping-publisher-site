@@ -2,7 +2,7 @@ name = "clipping-publisher-tiktok-auth"
 main = "src/worker.js"
 compatibility_date = "2026-09-20"
 
-# Create the namespace before deployment, then replace the placeholder. Never put secrets here.
+# Encrypted OAuth session records; TikTok secrets are supplied separately as Worker secrets.
 [[kv_namespaces]]
 binding = "TOKENS"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "1158ef9d5f3b4a98a486c6883dc9356a"
