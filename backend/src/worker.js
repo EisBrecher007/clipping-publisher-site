@@ -35,13 +35,37 @@ async function tokenFor(request, env) {
   if (Date.now() < token.expires_at - 60_000) return { sid, token };
   token = await refreshToken(sid, token, env); return { sid, token };
 }
+const PUBLISH_TTL_SECONDS = 31_536_000;
+const TERMINAL_PUBLISH_STATUSES = new Set(["PUBLISH_COMPLETE", "FAILED"]);
+const publishKey = (sid, hash) => `publish:${sid}:${hash}`;
+const latestPublishKey = sid => `publish_latest:${sid}`;
+const hex = buffer => [...new Uint8Array(buffer)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+async function sha256(file) { return hex(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())); }
+async function savePublish(key, record, env) { await env.TOKENS.put(key, await seal(record, env), { expirationTtl: PUBLISH_TTL_SECONDS }); }
+async function loadPublish(key, env) { const stored = await env.TOKENS.get(key); return stored ? await unseal(stored, env) : null; }
+async function rememberPublish(sid, key, record, env) {
+  await savePublish(key, record, env);
+  await env.TOKENS.put(latestPublishKey(sid), await seal({ key, job_id: record.job_id }, env), { expirationTtl: PUBLISH_TTL_SECONDS });
+}
+async function fetchPublishStatus(token, record, key, env) {
+  const response = await fetch(STATUS_FETCH, { method: "POST", headers: { Authorization: `Bearer ${token.access_token}`, "content-type": "application/json; charset=UTF-8" }, body: JSON.stringify({ publish_id: record.publish_id }) });
+  const status = await response.json();
+  if (!response.ok || status.error?.code !== "ok") throw new Error(status.error?.message || "TikTok publish-status check failed.");
+  record.last_tiktok_publish_status = status.data?.status || "PROCESSING_UPLOAD";
+  record.status = TERMINAL_PUBLISH_STATUSES.has(record.last_tiktok_publish_status) ? record.last_tiktok_publish_status : record.last_tiktok_publish_status;
+  record.updated_at = new Date().toISOString();
+  await savePublish(key, record, env);
+  return record;
+}
 async function creatorInfo(token) { const response = await fetch(CREATOR_INFO, { method: "POST", headers: { Authorization: `Bearer ${token.access_token}`, "content-type": "application/json; charset=UTF-8" }, body: "{}" }); const result = await response.json(); if (!response.ok || result.error?.code !== "ok") throw new Error(result.error?.message || "TikTok creator info request failed."); return result.data; }
 async function userInfo(token) { const response = await fetch(USER_INFO, { headers: { Authorization: `Bearer ${token.access_token}` } }); const result = await response.json(); if (!response.ok || result.error?.code !== "ok") throw new Error(result.error?.message || "TikTok user info request failed."); return result.data.user; }
 async function directPost(request, env) {
-  const { token } = await tokenFor(request, env); const form = await request.formData(); const file = form.get("video");
+  const { sid, token } = await tokenFor(request, env); const form = await request.formData(); const file = form.get("video");
   if (!(file instanceof File) || file.type !== "video/mp4" || !file.size) throw new Error("Choose a non-empty MP4 video.");
   if (file.size > MAX_DEMO_BYTES) throw new Error("This sandbox flow accepts videos up to 20 MB.");
   if (form.get("confirmed") !== "true") throw new Error("Explicit confirmation is required before a video can be sent.");
+  const video_sha256 = await sha256(file); const key = publishKey(sid, video_sha256); const existing = await loadPublish(key, env);
+  if (existing && !TERMINAL_PUBLISH_STATUSES.has(existing.status)) return { job_id: existing.job_id, status: existing.last_tiktok_publish_status || existing.status, privacy_level: existing.privacy_level, existing_publish: true };
   const creator = await creatorInfo(token); const privacy = String(form.get("privacy_level") || "");
   if (!privacy || !creator.privacy_level_options?.includes(privacy)) throw new Error("Choose a current privacy option returned by TikTok.");
   if (creator.privacy_level_options?.includes("SELF_ONLY") && privacy !== "SELF_ONLY") throw new Error("This Sandbox test must use TikTok's SELF_ONLY privacy setting.");
@@ -49,13 +73,25 @@ async function directPost(request, env) {
   const enabled = name => form.get(name) === "true";
   if (enabled("brand_content") && enabled("brand_organic")) throw new Error("Choose only one commercial-content disclosure.");
   const postInfo = { title: String(form.get("title") || ""), privacy_level: privacy, disable_comment: creator.comment_disabled ? true : !enabled("allow_comments"), disable_duet: creator.duet_disabled ? true : !enabled("allow_duet"), disable_stitch: creator.stitch_disabled ? true : !enabled("allow_stitch"), brand_content_toggle: enabled("brand_content"), brand_organic_toggle: enabled("brand_organic"), is_aigc: enabled("is_aigc") };
+  const record = { job_id: random(), publish_id: null, video_sha256, privacy_level: privacy, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: "INIT_REQUESTED", last_tiktok_publish_status: null };
+  await rememberPublish(sid, key, record, env);
   const init = await fetch(VIDEO_INIT, { method: "POST", headers: { Authorization: `Bearer ${token.access_token}`, "content-type": "application/json; charset=UTF-8" }, body: JSON.stringify({ post_info: postInfo, source_info: { source: "FILE_UPLOAD", video_size: file.size, chunk_size: file.size, total_chunk_count: 1 } }) }); const initialized = await init.json();
-  if (!init.ok || initialized.error?.code !== "ok" || !initialized.data?.publish_id || !initialized.data?.upload_url) throw new Error(initialized.error?.message || "TikTok Direct Post initialization failed.");
+  if (!init.ok || initialized.error?.code !== "ok" || !initialized.data?.publish_id || !initialized.data?.upload_url) { record.status = "FAILED"; record.updated_at = new Date().toISOString(); await rememberPublish(sid, key, record, env); throw new Error(initialized.error?.message || "TikTok Direct Post initialization failed."); }
+  record.publish_id = initialized.data.publish_id; record.status = "INIT_SUCCESS"; record.updated_at = new Date().toISOString(); await rememberPublish(sid, key, record, env);
+  record.status = "PUBLISH_ID_PERSISTED"; record.updated_at = new Date().toISOString(); await rememberPublish(sid, key, record, env);
+  record.status = "UPLOAD_STARTED"; record.updated_at = new Date().toISOString(); await rememberPublish(sid, key, record, env);
   const put = await fetch(initialized.data.upload_url, { method: "PUT", headers: { "content-type": "video/mp4", "content-length": String(file.size), "content-range": `bytes 0-${file.size - 1}/${file.size}` }, body: file.stream() });
-  if (!put.ok) throw new Error("TikTok video upload failed.");
-  const statusResponse = await fetch(STATUS_FETCH, { method: "POST", headers: { Authorization: `Bearer ${token.access_token}`, "content-type": "application/json; charset=UTF-8" }, body: JSON.stringify({ publish_id: initialized.data.publish_id }) }); const status = await statusResponse.json();
-  if (!statusResponse.ok || status.error?.code !== "ok") throw new Error(status.error?.message || "TikTok publish-status check failed.");
-  return { status: status.data?.status || "PROCESSING_UPLOAD", privacy_level: privacy };
+  if (!put.ok) { record.status = "FAILED"; record.updated_at = new Date().toISOString(); await rememberPublish(sid, key, record, env); throw new Error("TikTok video upload failed."); }
+  record.status = "UPLOAD_COMPLETE"; record.updated_at = new Date().toISOString(); await rememberPublish(sid, key, record, env);
+  const updated = await fetchPublishStatus(token, record, key, env);
+  return { job_id: updated.job_id, status: updated.last_tiktok_publish_status, privacy_level: privacy };
+}
+async function directPostStatus(request, env) {
+  const { sid, token } = await tokenFor(request, env); const latest = await loadPublish(latestPublishKey(sid), env);
+  if (!latest?.key) throw new Error("No persisted TikTok publish is available for this session.");
+  const record = await loadPublish(latest.key, env); if (!record?.publish_id) throw new Error("The persisted publish has no TikTok publish_id yet.");
+  const updated = await fetchPublishStatus(token, record, latest.key, env);
+  return { job_id: updated.job_id, status: updated.last_tiktok_publish_status, privacy_level: updated.privacy_level };
 }
 async function preflight(request, env) {
   const { token } = await tokenFor(request, env); const form = await request.formData(); const file = form.get("video");
@@ -77,6 +113,7 @@ export default { async fetch(request, env) {
     if (request.method === "POST" && url.pathname === "/api/token-refresh-check") { const sid = sessionId(request); if (!sid) throw new Error("Connect TikTok before continuing."); const stored = await env.TOKENS.get(`session:${sid}`); if (!stored) throw new Error("Your TikTok session has expired. Connect TikTok again."); const refreshed = await refreshToken(sid, await unseal(stored, env), env); return json({ refreshed: true, scopes: refreshed.scope || "" }, 200, headers); }
     if (request.method === "POST" && url.pathname === "/api/direct-post/preflight") return json(await preflight(request, env), 200, headers);
     if (request.method === "POST" && url.pathname === "/api/direct-post/submit") return json(await directPost(request, env), 200, headers);
+    if (request.method === "POST" && url.pathname === "/api/direct-post/status") return json(await directPostStatus(request, env), 200, headers);
     return json({ error: "Not found" }, 404, headers);
   } catch (error) { return json({ error: error.message || "Unexpected server error." }, 400, headers); }
 } };
