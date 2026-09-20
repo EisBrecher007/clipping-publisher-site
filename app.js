@@ -38,7 +38,7 @@
     const max = Number($("settings-section").dataset.maxDuration || 0); if (max && video.duration > max) return setStatus(`This video exceeds the creator's ${max}-second limit.`);
     const form = new FormData(); form.append("video", file); form.append("title", $("caption").value); form.append("privacy_level", $("privacy").value); form.append("allow_comments", $("allow-comments").checked); form.append("allow_duet", $("allow-duet").checked); form.append("allow_stitch", $("allow-stitch").checked); form.append("brand_content", $("brand-content").checked); form.append("brand_organic", $("brand-organic").checked); form.append("is_aigc", $("ai-generated").checked); form.append("duration_seconds", String(video.duration)); form.append("confirmed", "true");
     $("publish").disabled = true; setStatus("Initializing official TikTok Direct Post…");
-    try { const result = await request("/api/direct-post", { method: "POST", body: form }); setStatus(`TikTok accepted the upload. Publish ID: ${result.publish_id}. Status: ${result.status || "processing"}.`); } catch (error) { setStatus(error.message); $("publish").disabled = false; }
+    try { const result = await request("/api/direct-post/preflight", { method: "POST", body: form }); setStatus(`Direct Post preflight passed for ${result.creator}. No video was sent to TikTok.`); } catch (error) { setStatus(error.message); $("publish").disabled = false; }
   });
   if (query.get("connected") === "1" && session()) enableConnectedFlow();
 })();
