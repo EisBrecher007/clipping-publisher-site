@@ -37,22 +37,25 @@ async function tokenFor(request, env) {
 }
 async function creatorInfo(token) { const response = await fetch(CREATOR_INFO, { method: "POST", headers: { Authorization: `Bearer ${token.access_token}`, "content-type": "application/json; charset=UTF-8" }, body: "{}" }); const result = await response.json(); if (!response.ok || result.error?.code !== "ok") throw new Error(result.error?.message || "TikTok creator info request failed."); return result.data; }
 async function userInfo(token) { const response = await fetch(USER_INFO, { headers: { Authorization: `Bearer ${token.access_token}` } }); const result = await response.json(); if (!response.ok || result.error?.code !== "ok") throw new Error(result.error?.message || "TikTok user info request failed."); return result.data.user; }
-async function upload(request, env) {
+async function directPost(request, env) {
   const { token } = await tokenFor(request, env); const form = await request.formData(); const file = form.get("video");
   if (!(file instanceof File) || file.type !== "video/mp4" || !file.size) throw new Error("Choose a non-empty MP4 video.");
   if (file.size > MAX_DEMO_BYTES) throw new Error("This sandbox flow accepts videos up to 20 MB.");
   if (form.get("confirmed") !== "true") throw new Error("Explicit confirmation is required before a video can be sent.");
   const creator = await creatorInfo(token); const privacy = String(form.get("privacy_level") || "");
   if (!privacy || !creator.privacy_level_options?.includes(privacy)) throw new Error("Choose a current privacy option returned by TikTok.");
+  if (creator.privacy_level_options?.includes("SELF_ONLY") && privacy !== "SELF_ONLY") throw new Error("This Sandbox test must use TikTok's SELF_ONLY privacy setting.");
   const duration = Number(form.get("duration_seconds")); if (!Number.isFinite(duration) || duration <= 0 || (creator.max_video_post_duration_sec && duration > creator.max_video_post_duration_sec)) throw new Error("The video duration is not permitted for this creator.");
   const enabled = name => form.get(name) === "true";
+  if (enabled("brand_content") && enabled("brand_organic")) throw new Error("Choose only one commercial-content disclosure.");
   const postInfo = { title: String(form.get("title") || ""), privacy_level: privacy, disable_comment: creator.comment_disabled ? true : !enabled("allow_comments"), disable_duet: creator.duet_disabled ? true : !enabled("allow_duet"), disable_stitch: creator.stitch_disabled ? true : !enabled("allow_stitch"), brand_content_toggle: enabled("brand_content"), brand_organic_toggle: enabled("brand_organic"), is_aigc: enabled("is_aigc") };
   const init = await fetch(VIDEO_INIT, { method: "POST", headers: { Authorization: `Bearer ${token.access_token}`, "content-type": "application/json; charset=UTF-8" }, body: JSON.stringify({ post_info: postInfo, source_info: { source: "FILE_UPLOAD", video_size: file.size, chunk_size: file.size, total_chunk_count: 1 } }) }); const initialized = await init.json();
-  if (!init.ok || initialized.error?.code !== "ok") throw new Error(initialized.error?.message || "TikTok Direct Post initialization failed.");
+  if (!init.ok || initialized.error?.code !== "ok" || !initialized.data?.publish_id || !initialized.data?.upload_url) throw new Error(initialized.error?.message || "TikTok Direct Post initialization failed.");
   const put = await fetch(initialized.data.upload_url, { method: "PUT", headers: { "content-type": "video/mp4", "content-length": String(file.size), "content-range": `bytes 0-${file.size - 1}/${file.size}` }, body: file.stream() });
   if (!put.ok) throw new Error("TikTok video upload failed.");
   const statusResponse = await fetch(STATUS_FETCH, { method: "POST", headers: { Authorization: `Bearer ${token.access_token}`, "content-type": "application/json; charset=UTF-8" }, body: JSON.stringify({ publish_id: initialized.data.publish_id }) }); const status = await statusResponse.json();
-  return { publish_id: initialized.data.publish_id, status: status.data?.status || "processing" };
+  if (!statusResponse.ok || status.error?.code !== "ok") throw new Error(status.error?.message || "TikTok publish-status check failed.");
+  return { status: status.data?.status || "PROCESSING_UPLOAD", privacy_level: privacy };
 }
 async function preflight(request, env) {
   const { token } = await tokenFor(request, env); const form = await request.formData(); const file = form.get("video");
@@ -73,6 +76,7 @@ export default { async fetch(request, env) {
     if (request.method === "POST" && url.pathname === "/api/creator-info") { const { token } = await tokenFor(request, env); return json({ user: await userInfo(token), creator: await creatorInfo(token) }, 200, headers); }
     if (request.method === "POST" && url.pathname === "/api/token-refresh-check") { const sid = sessionId(request); if (!sid) throw new Error("Connect TikTok before continuing."); const stored = await env.TOKENS.get(`session:${sid}`); if (!stored) throw new Error("Your TikTok session has expired. Connect TikTok again."); const refreshed = await refreshToken(sid, await unseal(stored, env), env); return json({ refreshed: true, scopes: refreshed.scope || "" }, 200, headers); }
     if (request.method === "POST" && url.pathname === "/api/direct-post/preflight") return json(await preflight(request, env), 200, headers);
+    if (request.method === "POST" && url.pathname === "/api/direct-post/submit") return json(await directPost(request, env), 200, headers);
     return json({ error: "Not found" }, 404, headers);
   } catch (error) { return json({ error: error.message || "Unexpected server error." }, 400, headers); }
 } };
