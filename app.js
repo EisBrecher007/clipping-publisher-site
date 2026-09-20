@@ -14,6 +14,16 @@
     return body;
   };
   const setStatus = text => { $("status").textContent = text; };
+  const selected = id => $(id).checked;
+  const updateReview = () => {
+    const file = $("video").files[0];
+    $("review-video").textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB` : "No video selected";
+    $("review-privacy").textContent = $("privacy").value ? $("privacy").value.replaceAll("_", " ") : "Choose a TikTok setting";
+    $("review-caption").textContent = $("caption").value.trim() || "No caption";
+    $("review-interactions").textContent = `Comments: ${selected("allow-comments") ? "on" : "off"} · Duet: ${selected("allow-duet") ? "on" : "off"} · Stitch: ${selected("allow-stitch") ? "on" : "off"}`;
+    const disclosures = [["brand-content", "Paid partnership"], ["brand-organic", "Own business"], ["ai-generated", "AI-generated"]].filter(([id]) => selected(id)).map(([, label]) => label);
+    $("review-disclosure").textContent = disclosures.join(" · ") || "None selected";
+  };
   const enableConnectedFlow = async () => {
     $("connection-copy").textContent = "Connected to TikTok Sandbox.";
     $("connect").textContent = "TikTok connected"; $("connect").disabled = true;
@@ -31,8 +41,9 @@
     } catch (error) { setStatus(error.message); }
   };
   $("connect").addEventListener("click", () => { if (!apiOrigin) return setStatus("Sandbox backend is not configured yet."); location.assign(apiOrigin + "/oauth/start"); });
-  $("video").addEventListener("change", () => { const file = $("video").files[0]; $("video-summary").textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB` : ""; });
-  $("caption").addEventListener("input", () => { $("caption-count").textContent = $("caption").value.length; });
+  $("video").addEventListener("change", () => { const file = $("video").files[0]; $("video-summary").textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB` : ""; updateReview(); });
+  $("caption").addEventListener("input", () => { $("caption-count").textContent = $("caption").value.length; updateReview(); });
+  ["privacy", "allow-comments", "allow-duet", "allow-stitch", "brand-content", "brand-organic", "ai-generated"].forEach(id => $(id).addEventListener("change", updateReview));
   $("consent").addEventListener("change", () => { $("publish").disabled = !$("consent").checked; });
   $("publish").addEventListener("click", async () => {
     const file = $("video").files[0];

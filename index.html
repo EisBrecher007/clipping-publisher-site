@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Clipping Publisher</title>
   <link rel="stylesheet" href="styles.css">
+  <style>.review-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem;margin:1rem 0;padding:0}.review-summary div{padding:.65rem .75rem;border:1px solid #d5e1ec;border-radius:.4rem;background:#f6f9fc}.review-summary dt{font-size:.78rem;font-weight:750;letter-spacing:.04em;text-transform:uppercase;color:#53697d}.review-summary dd{margin:.2rem 0 0;overflow-wrap:anywhere;color:#11253d}@media(max-width:680px){.review-summary{grid-template-columns:1fr}}</style>
 </head>
 <body>
   <header>
@@ -38,7 +39,7 @@
 
     <section class="card" id="consent-section" hidden aria-labelledby="consent-heading">
       <div class="step">4</div>
-      <div><h2 id="consent-heading">Confirm before sending</h2><label class="consent"><input id="consent" type="checkbox"> I confirm that I want Clipping Publisher to validate this selected video and its post settings against the connected TikTok account.</label><button id="publish" type="button" disabled>Run Direct Post preflight</button><p id="status" class="status" role="status" aria-live="polite"></p></div>
+      <div><h2 id="consent-heading">Review before posting</h2><p class="muted">Confirm the request below. This step validates settings only; it does not upload or publish the video to TikTok.</p><dl id="review-summary" class="review-summary"><div><dt>Video</dt><dd id="review-video">No video selected</dd></div><div><dt>Privacy</dt><dd id="review-privacy">Choose a TikTok setting</dd></div><div><dt>Caption</dt><dd id="review-caption">No caption</dd></div><div><dt>Interactions</dt><dd id="review-interactions">Comments, Duet, Stitch: off</dd></div><div><dt>Disclosure</dt><dd id="review-disclosure">None selected</dd></div></dl><label class="consent"><input id="consent" type="checkbox"> I confirm that I want Clipping Publisher to validate this selected video and its post settings against the connected TikTok account.</label><button id="publish" type="button" disabled>Validate posting request</button><p id="status" class="status" role="status" aria-live="polite"></p></div>
     </section>
   </main>
   <footer><a href="terms.html">Terms of Service</a><a href="privacy.html">Privacy Policy</a><a href="contact.html">Contact</a></footer>
