@@ -15,6 +15,7 @@
   };
   const setStatus = text => { $("status").textContent = text; };
   const selected = id => $(id).checked;
+  const formatFileSize = bytes => bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   const availability = disabled => disabled ? "Unavailable for this creator" : "Available";
   const setCreatorDetails = creator => {
     const name = creator.creator_username || creator.creator_nickname || "Connected TikTok creator";
@@ -36,7 +37,7 @@
   };
   const updateReview = () => {
     const file = $("video").files[0];
-    $("review-video").textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB` : "No video selected";
+    $("review-video").textContent = file ? `${file.name} · ${formatFileSize(file.size)}` : "No video selected";
     $("review-privacy").textContent = $("privacy").value ? $("privacy").value.replaceAll("_", " ") : "Choose a TikTok setting";
     $("review-caption").textContent = $("caption").value.trim() || "No caption";
     $("review-interactions").textContent = `Comments: ${selected("allow-comments") ? "on" : "off"} · Duet: ${selected("allow-duet") ? "on" : "off"} · Stitch: ${selected("allow-stitch") ? "on" : "off"}`;
@@ -56,7 +57,7 @@
     } catch (error) { $("creator-summary").textContent = "Creator settings could not be loaded. Reconnect TikTok to continue."; setStatus(error.message); }
   };
   $("connect").addEventListener("click", () => { if (!apiOrigin) return setStatus("Sandbox backend is not configured yet."); location.assign(apiOrigin + "/oauth/start"); });
-  $("video").addEventListener("change", () => { const file = $("video").files[0]; $("video-summary").textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB` : ""; updateReview(); });
+  $("video").addEventListener("change", () => { const file = $("video").files[0]; $("video-summary").textContent = file ? `${file.name} · ${formatFileSize(file.size)}` : ""; updateReview(); });
   $("caption").addEventListener("input", () => { $("caption-count").textContent = $("caption").value.length; updateReview(); });
   ["privacy", "allow-comments", "allow-duet", "allow-stitch", "brand-content", "brand-organic", "ai-generated"].forEach(id => $(id).addEventListener("change", updateReview));
   let uploadPrepared = false;
