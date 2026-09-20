@@ -19,8 +19,8 @@
     $("connect").textContent = "TikTok connected"; $("connect").disabled = true;
     $("video-section").hidden = false; $("settings-section").hidden = false; $("consent-section").hidden = false;
     try {
-      const { creator } = await request("/api/creator-info", { method: "POST" });
-      $("creator-summary").textContent = `Posting as ${creator.creator_nickname || creator.creator_username}. Choose one of the privacy options returned by TikTok.`;
+      const { user, creator } = await request("/api/creator-info", { method: "POST" });
+      $("creator-summary").textContent = `Connected as ${user.display_name || creator.creator_nickname || creator.creator_username}. Posting options below are returned live by TikTok.`;
       for (const option of creator.privacy_level_options || []) { const el = document.createElement("option"); el.value = option; el.textContent = option.replaceAll("_", " "); $("privacy").append(el); }
       [["allow-comments", creator.comment_disabled], ["allow-duet", creator.duet_disabled], ["allow-stitch", creator.stitch_disabled]].forEach(([id, disabled]) => { const input = $(id); input.disabled = Boolean(disabled); if (disabled) input.parentElement.append(" (unavailable for this creator)"); });
       $("settings-section").dataset.maxDuration = creator.max_video_post_duration_sec || "";

@@ -1,5 +1,6 @@
 const TIKTOK_AUTH = "https://www.tiktok.com/v2/auth/authorize/";
 const TIKTOK_TOKEN = "https://open.tiktokapis.com/v2/oauth/token/";
+const USER_INFO = "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name,avatar_url";
 const CREATOR_INFO = "https://open.tiktokapis.com/v2/post/publish/creator_info/query/";
 const VIDEO_INIT = "https://open.tiktokapis.com/v2/post/publish/video/init/";
 const STATUS_FETCH = "https://open.tiktokapis.com/v2/post/publish/status/fetch/";
@@ -25,6 +26,7 @@ async function tokenFor(request, env) {
   token = { ...refreshed, expires_at: Date.now() + refreshed.expires_in * 1000 }; await env.TOKENS.put(`session:${sid}`, await seal(token, env), { expirationTtl: Math.min(refreshed.refresh_expires_in || 2_592_000, 31_536_000) }); return { sid, token };
 }
 async function creatorInfo(token) { const response = await fetch(CREATOR_INFO, { method: "POST", headers: { Authorization: `Bearer ${token.access_token}`, "content-type": "application/json; charset=UTF-8" }, body: "{}" }); const result = await response.json(); if (!response.ok || result.error?.code !== "ok") throw new Error(result.error?.message || "TikTok creator info request failed."); return result.data; }
+async function userInfo(token) { const response = await fetch(USER_INFO, { headers: { Authorization: `Bearer ${token.access_token}` } }); const result = await response.json(); if (!response.ok || result.error?.code !== "ok") throw new Error(result.error?.message || "TikTok user info request failed."); return result.data.user; }
 async function upload(request, env) {
   const { token } = await tokenFor(request, env); const form = await request.formData(); const file = form.get("video");
   if (!(file instanceof File) || file.type !== "video/mp4" || !file.size) throw new Error("Choose a non-empty MP4 video.");
@@ -46,9 +48,9 @@ export default { async fetch(request, env) {
   const url = new URL(request.url); const headers = cors(request, env); if (request.method === "OPTIONS") return new Response(null, { headers });
   try {
     if (url.pathname === "/health") return json({ ok: true }, 200, headers);
-    if (url.pathname === "/oauth/start") { const sid = random(), state = random(); await env.TOKENS.put(`state:${state}`, sid, { expirationTtl: 600 }); const params = new URLSearchParams({ client_key: env.TIKTOK_CLIENT_KEY, response_type: "code", scope: "video.publish", redirect_uri: `${env.API_ORIGIN}/oauth/callback`, state }); return Response.redirect(`${TIKTOK_AUTH}?${params}`, 302); }
+    if (url.pathname === "/oauth/start") { const sid = random(), state = random(); await env.TOKENS.put(`state:${state}`, sid, { expirationTtl: 600 }); const params = new URLSearchParams({ client_key: env.TIKTOK_CLIENT_KEY, response_type: "code", scope: "user.info.basic,video.publish", redirect_uri: `${env.API_ORIGIN}/oauth/callback`, state }); return Response.redirect(`${TIKTOK_AUTH}?${params}`, 302); }
     if (url.pathname === "/oauth/callback") { const state = url.searchParams.get("state"), code = url.searchParams.get("code"); const sid = state && await env.TOKENS.get(`state:${state}`); if (!sid || !code) return new Response("OAuth validation failed.", { status: 400 }); await env.TOKENS.delete(`state:${state}`); const form = new URLSearchParams({ client_key: env.TIKTOK_CLIENT_KEY, client_secret: env.TIKTOK_CLIENT_SECRET, code, grant_type: "authorization_code", redirect_uri: `${env.API_ORIGIN}/oauth/callback` }); const response = await fetch(TIKTOK_TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form }); const token = await response.json(); if (!response.ok) return new Response("TikTok token exchange failed.", { status: 502 }); token.expires_at = Date.now() + token.expires_in * 1000; await env.TOKENS.put(`session:${sid}`, await seal(token, env), { expirationTtl: Math.min(token.refresh_expires_in || 2_592_000, 31_536_000) }); return Response.redirect(`${env.APP_ORIGIN}/?connected=1#session=${sid}`, 302); }
-    if (request.method === "POST" && url.pathname === "/api/creator-info") { const { token } = await tokenFor(request, env); return json({ creator: await creatorInfo(token) }, 200, headers); }
+    if (request.method === "POST" && url.pathname === "/api/creator-info") { const { token } = await tokenFor(request, env); return json({ user: await userInfo(token), creator: await creatorInfo(token) }, 200, headers); }
     if (request.method === "POST" && url.pathname === "/api/direct-post") return json(await upload(request, env), 200, headers);
     return json({ error: "Not found" }, 404, headers);
   } catch (error) { return json({ error: error.message || "Unexpected server error." }, 400, headers); }
