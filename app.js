@@ -81,7 +81,7 @@
     try {
       let result = await request("/api/direct-post/upload", { method: "POST", body: await directPostForm(true) });
       for (let attempt = 0; attempt < 24 && !["PUBLISH_COMPLETE", "FAILED"].includes(result.status); attempt++) { await new Promise(resolve => setTimeout(resolve, 5000)); result = await request("/api/direct-post/status", { method: "POST" }); }
-      setStatus(`Private Sandbox post status: ${result.status}.`);
+      setStatus(result.visibility_verification_required ? "TikTok reports PUBLISH_COMPLETE. Verify the SELF_ONLY post in the target account before treating it as confirmed." : `Private Sandbox post status: ${result.status}.`);
     } catch (error) { setStatus(error.message); }
   });
   if (query.get("connected") === "1" && session()) enableConnectedFlow();
