@@ -36,7 +36,7 @@ async function refreshToken(sid, token, env) {
   const response = await fetch(TIKTOK_TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form }); const raw = await response.json();
   if (!response.ok) throw new Error(raw.error_description || "TikTok token refresh failed.");
   const refreshed = normalizeToken(raw); if (!refreshed.access_token || !refreshed.refresh_token) throw new Error("TikTok token refresh response is incomplete.");
-  const next = { ...refreshed, expires_at: Date.now() + refreshed.expires_in * 1000 }; await env.TOKENS.put(`session:${sid}`, await seal(next, env), { expirationTtl: Math.min(refreshed.refresh_expires_in || 2_592_000, 31_536_000) }); return next;
+  const next = { ...token, ...refreshed, scope: refreshed.scope || token.scope || "", expires_at: Date.now() + refreshed.expires_in * 1000 }; await env.TOKENS.put(`session:${sid}`, await seal(next, env), { expirationTtl: Math.min(refreshed.refresh_expires_in || 2_592_000, 31_536_000) }); return next;
 }
 async function tokenFor(request, env) {
   const sid = sessionId(request) || await machineSession(request, env); if (!sid) throw new Error("Connect TikTok before continuing.");

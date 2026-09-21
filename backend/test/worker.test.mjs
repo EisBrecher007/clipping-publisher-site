@@ -65,7 +65,7 @@ test("prepare persists one publish identity and duplicate prepare never reinitia
   const originalFetch = globalThis.fetch;
   let initCalls = 0;
   globalThis.fetch = async (url, options = {}) => {
-    if (String(url).includes("oauth/token")) return response({ access_token: "access", refresh_token: "refresh", expires_in: 3600, refresh_expires_in: 3600, scope: "video.publish" });
+    if (String(url).includes("oauth/token")) return response(options.body.get("grant_type") === "refresh_token" ? { access_token: "access-refreshed", refresh_token: "refresh-refreshed", expires_in: 3600, refresh_expires_in: 3600 } : { access_token: "access", refresh_token: "refresh", expires_in: 3600, refresh_expires_in: 3600, scope: "video.publish" });
     if (String(url).includes("creator_info/query")) return response({ error: { code: "ok" }, data: { privacy_level_options: ["SELF_ONLY"], max_video_post_duration_sec: 300 } });
     if (String(url).includes("video/init")) { initCalls++; return response({ error: { code: "ok" }, data: { publish_id: "opaque-publish-id", upload_url: "https://upload.example/one" } }); }
     throw new Error(`unexpected network request: ${url}`);
@@ -125,7 +125,9 @@ test("one-time Windows pairing can use the encrypted machine credential after br
     const creator = await worker.fetch(new Request("https://worker.example/api/creator-info", { method: "POST", headers: { "X-Clipping-Machine": machine, "X-Clipping-Machine-Secret": secret } }), e);
     assert.equal((await creator.json()).creator.creator_username, "paired-sandbox");
     const refresh = await worker.fetch(new Request("https://worker.example/api/token-refresh-check", { method: "POST", headers: { "X-Clipping-Machine": machine, "X-Clipping-Machine-Secret": secret } }), e);
-    assert.equal((await refresh.json()).refreshed, true);
+    const refreshBody = await refresh.json();
+    assert.equal(refreshBody.refreshed, true);
+    assert.equal(refreshBody.scopes, "video.publish");
     const stored = await e.TOKENS.get(`machine:${machine}`);
     assert.ok(stored && !stored.includes(secret) && !stored.includes(sid));
   } finally { globalThis.fetch = originalFetch; }
