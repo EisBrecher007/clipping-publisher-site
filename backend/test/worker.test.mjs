@@ -80,3 +80,29 @@ test("prepare persists one publish identity and duplicate prepare never reinitia
     assert.equal(persisted, undefined, "publish identity must be encrypted at rest");
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("fresh SELF_ONLY status completion requires visibility verification", async () => {
+  const e = env();
+  const originalFetch = globalThis.fetch;
+  let initCalls = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.includes("oauth/token")) return response({ access_token: "access", refresh_token: "refresh", expires_in: 3600, refresh_expires_in: 3600, scope: "video.publish" });
+    if (target.includes("creator_info/query")) return response({ error: { code: "ok" }, data: { privacy_level_options: ["SELF_ONLY"], max_video_post_duration_sec: 300 } });
+    if (target.includes("video/init")) { initCalls++; return response({ error: { code: "ok" }, data: { publish_id: "opaque-publish-id", upload_url: "https://upload.example/one" } }); }
+    if (target === "https://upload.example/one") return new Response(null, { status: 200 });
+    if (target.includes("status/fetch")) return response({ error: { code: "ok" }, data: { status: "PUBLISH_COMPLETE", uploaded_bytes: 7 } });
+    throw new Error(`unexpected network request: ${url}`);
+  };
+  try {
+    const sid = await connectedSession(e);
+    const requestFor = (path, confirmed = false) => { const form = new FormData(); form.set("video", new File(["neutral"], "video.mp4", { type: "video/mp4" })); form.set("privacy_level", "SELF_ONLY"); form.set("duration_seconds", "1"); form.set("title", "neutral"); if (confirmed) form.set("confirmed", "true"); return new Request(`https://worker.example${path}`, { method: "POST", headers: { Authorization: `Bearer ${sid}` }, body: form }); };
+    await worker.fetch(requestFor("/api/direct-post/prepare"), e);
+    const upload = await worker.fetch(requestFor("/api/direct-post/upload", true), e);
+    const body = await upload.json();
+    assert.equal(upload.status, 200);
+    assert.equal(body.status, "PUBLISH_COMPLETE");
+    assert.equal(body.visibility_verification_required, true);
+    assert.equal(initCalls, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
