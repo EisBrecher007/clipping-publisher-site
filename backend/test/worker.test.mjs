@@ -124,6 +124,8 @@ test("one-time Windows pairing can use the encrypted machine credential after br
     assert.equal((await complete.json()).paired, true);
     const creator = await worker.fetch(new Request("https://worker.example/api/creator-info", { method: "POST", headers: { "X-Clipping-Machine": machine, "X-Clipping-Machine-Secret": secret } }), e);
     assert.equal((await creator.json()).creator.creator_username, "paired-sandbox");
+    const refresh = await worker.fetch(new Request("https://worker.example/api/token-refresh-check", { method: "POST", headers: { "X-Clipping-Machine": machine, "X-Clipping-Machine-Secret": secret } }), e);
+    assert.equal((await refresh.json()).refreshed, true);
     const stored = await e.TOKENS.get(`machine:${machine}`);
     assert.ok(stored && !stored.includes(secret) && !stored.includes(sid));
   } finally { globalThis.fetch = originalFetch; }
