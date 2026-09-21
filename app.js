@@ -84,5 +84,11 @@
       setStatus(result.visibility_verification_required ? "TikTok reports PUBLISH_COMPLETE. Verify the SELF_ONLY post in the target account before treating it as confirmed." : `Private Sandbox post status: ${result.status}.`);
     } catch (error) { setStatus(error.message); }
   });
+  const pairingCode = query.get("pairing_code");
+  if (pairingCode && session()) {
+    request("/api/scheduler/pair/complete", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pairing_code: pairingCode }) })
+      .then(() => { history.replaceState({}, "", location.pathname); $("connection-copy").textContent = "Windows scheduler paired securely."; })
+      .catch(error => { $("connection-copy").textContent = `Windows scheduler pairing failed: ${error.message}`; });
+  }
   if (query.get("connected") === "1" && session()) enableConnectedFlow();
 })();

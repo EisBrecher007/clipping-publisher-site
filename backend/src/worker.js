@@ -19,6 +19,17 @@ async function seal(value, env) { const iv = crypto.getRandomValues(new Uint8Arr
 async function unseal(value, env) { const payload = JSON.parse(value); const clear = await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes(payload.iv) }, await encryptionKey(env), bytes(payload.data)); return JSON.parse(new TextDecoder().decode(clear)); }
 function cors(request, env) { const origin = request.headers.get("Origin"); return origin === new URL(env.APP_ORIGIN).origin ? { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Headers": "Authorization, Content-Type", "Access-Control-Allow-Methods": "POST, OPTIONS", Vary: "Origin" } : {}; }
 function sessionId(request) { const auth = request.headers.get("Authorization") || ""; return auth.startsWith("Bearer ") ? auth.slice(7) : null; }
+const machineKey = id => `machine:${id}`;
+const pairingKey = code => `pair:${code}`;
+async function digest(value) { const data = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)); return Array.from(new Uint8Array(data), byte => byte.toString(16).padStart(2, "0")).join(""); }
+function equal(left, right) { if (!left || !right || left.length !== right.length) return false; let diff = 0; for (let index = 0; index < left.length; index++) diff |= left.charCodeAt(index) ^ right.charCodeAt(index); return diff === 0; }
+async function machineSession(request, env) {
+  const id = request.headers.get("X-Clipping-Machine"); const secret = request.headers.get("X-Clipping-Machine-Secret");
+  if (!id || !secret) return null;
+  const stored = await env.TOKENS.get(machineKey(id)); if (!stored) throw new Error("This Windows scheduler is not paired.");
+  const pairing = await unseal(stored, env); if (!equal(await digest(secret), pairing.secret_hash)) throw new Error("Windows scheduler authentication failed.");
+  return pairing.sid;
+}
 function cookie(request, name) { return (request.headers.get("Cookie") || "").split(";").map(v => v.trim()).find(v => v.startsWith(`${name}=`))?.slice(name.length + 1) || null; }
 async function refreshToken(sid, token, env) {
   const form = new URLSearchParams({ client_key: env.TIKTOK_CLIENT_KEY, client_secret: env.TIKTOK_CLIENT_SECRET, grant_type: "refresh_token", refresh_token: token.refresh_token });
@@ -28,11 +39,27 @@ async function refreshToken(sid, token, env) {
   const next = { ...refreshed, expires_at: Date.now() + refreshed.expires_in * 1000 }; await env.TOKENS.put(`session:${sid}`, await seal(next, env), { expirationTtl: Math.min(refreshed.refresh_expires_in || 2_592_000, 31_536_000) }); return next;
 }
 async function tokenFor(request, env) {
-  const sid = sessionId(request); if (!sid) throw new Error("Connect TikTok before continuing.");
+  const sid = sessionId(request) || await machineSession(request, env); if (!sid) throw new Error("Connect TikTok before continuing.");
   const stored = await env.TOKENS.get(`session:${sid}`); if (!stored) throw new Error("Your TikTok session has expired. Connect TikTok again.");
   let token = normalizeToken(await unseal(stored, env)); if (!token.access_token || !token.refresh_token) throw new Error("Stored TikTok token record is incomplete. Connect TikTok again.");
   if (Date.now() < token.expires_at - 60_000) return { sid, token };
   token = await refreshToken(sid, token, env); return { sid, token };
+}
+async function startSchedulerPairing(request, env) {
+  const body = await request.json(); const machine_id = String(body.machine_id || ""); const secret_hash = String(body.secret_hash || "");
+  if (!/^[a-f0-9]{32}$/i.test(machine_id) || !/^[a-f0-9]{64}$/i.test(secret_hash)) throw new Error("Invalid scheduler pairing request.");
+  const code = random().slice(0, 12).toUpperCase();
+  await env.TOKENS.put(pairingKey(code), await seal({ machine_id, secret_hash }, env), { expirationTtl: 600 });
+  return { pairing_code: code, expires_in_seconds: 600 };
+}
+async function completeSchedulerPairing(request, env) {
+  const sid = sessionId(request); if (!sid) throw new Error("Connect TikTok before pairing this Windows scheduler.");
+  const code = String((await request.json()).pairing_code || "").toUpperCase(); const stored = await env.TOKENS.get(pairingKey(code));
+  if (!stored) throw new Error("Pairing code is invalid or expired.");
+  const pairing = await unseal(stored, env);
+  await env.TOKENS.put(machineKey(pairing.machine_id), await seal({ sid, secret_hash: pairing.secret_hash }, env), { expirationTtl: PUBLISH_TTL_SECONDS });
+  await env.TOKENS.delete(pairingKey(code));
+  return { paired: true };
 }
 const PUBLISH_TTL_SECONDS = 31_536_000;
 const TERMINAL_PUBLISH_STATUSES = new Set(["PUBLISH_COMPLETE", "FAILED"]);
@@ -118,6 +145,8 @@ export default { async fetch(request, env) {
   const url = new URL(request.url); const headers = cors(request, env); if (request.method === "OPTIONS") return new Response(null, { headers });
   try {
     if (url.pathname === "/health") return json({ ok: true }, 200, headers);
+    if (request.method === "POST" && url.pathname === "/api/scheduler/pair/start") return json(await startSchedulerPairing(request, env), 200, headers);
+    if (request.method === "POST" && url.pathname === "/api/scheduler/pair/complete") return json(await completeSchedulerPairing(request, env), 200, headers);
     if (url.pathname === "/oauth/start") { const sid = random(), state = random(); const params = new URLSearchParams({ client_key: env.TIKTOK_CLIENT_KEY, response_type: "code", scope: "video.publish", redirect_uri: `${env.API_ORIGIN}/oauth/callback`, state }); return new Response(null, { status: 302, headers: { Location: `${TIKTOK_AUTH}?${params}`, "Set-Cookie": `cp_oauth_state=${state}:${sid}; Path=/oauth/callback; Max-Age=600; HttpOnly; Secure; SameSite=Lax` } }); }
     if (url.pathname === "/oauth/callback") { const state = url.searchParams.get("state"), code = url.searchParams.get("code"), stateCookie = cookie(request, "cp_oauth_state"); const [cookieState, sid] = (stateCookie || ":").split(":"); if (!state || !code || state !== cookieState || !sid) return new Response("OAuth validation failed.", { status: 400 }); const form = new URLSearchParams({ client_key: env.TIKTOK_CLIENT_KEY, client_secret: env.TIKTOK_CLIENT_SECRET, code, grant_type: "authorization_code", redirect_uri: `${env.API_ORIGIN}/oauth/callback` }); const response = await fetch(TIKTOK_TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form }); const rawText = await response.text(); let raw = null; try { raw = JSON.parse(rawText); } catch {} const token = normalizeToken(raw); const missing = ["access_token", "refresh_token"].filter(field => !token[field]); if (!response.ok || !raw || raw.error || missing.length) return json({ ERROR: raw?.error ?? null, ERROR_DESCRIPTION: raw?.error_description ?? null, LOG_ID: raw?.log_id ?? null, HTTP_STATUS: response.status, TOKEN_ENDPOINT: TIKTOK_TOKEN }, 502); token.expires_at = Date.now() + token.expires_in * 1000; await env.TOKENS.put(`session:${sid}`, await seal(token, env), { expirationTtl: Math.min(token.refresh_expires_in || 2_592_000, 31_536_000) }); return new Response(null, { status: 302, headers: { Location: `${env.APP_ORIGIN}/?connected=1#session=${sid}`, "Set-Cookie": "cp_oauth_state=; Path=/oauth/callback; Max-Age=0; HttpOnly; Secure; SameSite=Lax" } }); }
     if (request.method === "POST" && url.pathname === "/api/creator-info") { const { token } = await tokenFor(request, env); return json({ creator: await creatorInfo(token) }, 200, headers); }

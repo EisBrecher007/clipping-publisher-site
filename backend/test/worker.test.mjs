@@ -6,6 +6,7 @@ class MemoryKV {
   values = new Map();
   async get(key) { return this.values.get(key) ?? null; }
   async put(key, value) { this.values.set(key, value); }
+  async delete(key) { this.values.delete(key); }
 }
 
 const env = () => ({
@@ -104,5 +105,26 @@ test("fresh SELF_ONLY status completion requires visibility verification", async
     assert.equal(body.status, "PUBLISH_COMPLETE");
     assert.equal(body.visibility_verification_required, true);
     assert.equal(initCalls, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("one-time Windows pairing can use the encrypted machine credential after browser OAuth", async () => {
+  const e = env(); const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes("oauth/token")) return response({ access_token: "access", refresh_token: "refresh", expires_in: 3600, refresh_expires_in: 3600, scope: "video.publish" });
+    if (String(url).includes("creator_info/query")) return response({ error: { code: "ok" }, data: { creator_username: "paired-sandbox", privacy_level_options: ["SELF_ONLY"] } });
+    throw new Error(`unexpected network request: ${url}`);
+  };
+  try {
+    const machine = "a".repeat(32); const secret = "machine-secret"; const secret_hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret)).then(bytes => Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, "0")).join(""));
+    const start = await worker.fetch(new Request("https://worker.example/api/scheduler/pair/start", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ machine_id: machine, secret_hash }) }), e);
+    const { pairing_code } = await start.json();
+    const sid = await connectedSession(e);
+    const complete = await worker.fetch(new Request("https://worker.example/api/scheduler/pair/complete", { method: "POST", headers: { Authorization: `Bearer ${sid}`, "content-type": "application/json" }, body: JSON.stringify({ pairing_code }) }), e);
+    assert.equal((await complete.json()).paired, true);
+    const creator = await worker.fetch(new Request("https://worker.example/api/creator-info", { method: "POST", headers: { "X-Clipping-Machine": machine, "X-Clipping-Machine-Secret": secret } }), e);
+    assert.equal((await creator.json()).creator.creator_username, "paired-sandbox");
+    const stored = await e.TOKENS.get(`machine:${machine}`);
+    assert.ok(stored && !stored.includes(secret) && !stored.includes(sid));
   } finally { globalThis.fetch = originalFetch; }
 });
